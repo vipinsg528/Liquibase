@@ -2,66 +2,64 @@ package com.Liquibase.config;
 
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
-import org.springframework.security.authorization.AuthorizationManagerFactories;
-import org.springframework.security.config.Customizer;
+import org.springframework.security.authentication.AuthenticationManager;
+import org.springframework.security.config.annotation.authentication.configuration.AuthenticationConfiguration;
+import org.springframework.security.config.annotation.web.*;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
 import org.springframework.security.config.annotation.web.configurers.AbstractHttpConfigurer;
-import org.springframework.security.core.authority.FactorGrantedAuthority;
-import org.springframework.security.core.userdetails.User;
-import org.springframework.security.core.userdetails.UserDetails;
-import org.springframework.security.provisioning.InMemoryUserDetailsManager;
+import org.springframework.security.config.http.SessionCreationPolicy;
 import org.springframework.security.web.SecurityFilterChain;
-import org.springframework.security.web.access.intercept.RequestAuthorizationContext;
 
 @Configuration
 @EnableWebSecurity
 public class SecurityConfig {
 
+    private final JwtAuthenticationFilter jwtFilter;
+
+    public SecurityConfig(JwtAuthenticationFilter jwtFilter) {
+        this.jwtFilter = jwtFilter;
+    }
+
     @Bean
-    public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
-        // FIX 1: Change generic type to RequestAuthorizationContext for Servlet compatibility
-        var mfa = AuthorizationManagerFactories.<RequestAuthorizationContext>multiFactor()
-                .requireFactors(FactorGrantedAuthority.PASSWORD_AUTHORITY)
-                .build();
+    public SecurityFilterChain filterChain(HttpSecurity http) throws Exception {
 
         http
                 .csrf(AbstractHttpConfigurer::disable)
+                .sessionManagement(session ->
+                        session.sessionCreationPolicy(SessionCreationPolicy.STATELESS)
+                )
                 .authorizeHttpRequests(auth -> auth
-                        // .access() now receives the correctly typed MFA manager
-                        .requestMatchers("/api/employees/admin/**").access(mfa.hasRole("ADMIN"))
-                        .requestMatchers("/api/employees/**").access(mfa.hasAllRoles("USER", "ADMIN"))
+
+                        // 🔓 AUTH APIs
+                        .requestMatchers("/auth/**").permitAll()
+
+                        // 🔐 ADMIN ONLY
+                        .requestMatchers("/api/employees/admin/**")
+                        .hasRole("ADMIN")
+
+                        // 🔐 USER + ADMIN
+                        .requestMatchers("/api/employees/**")
+                        .hasAnyRole("USER", "ADMIN")
+
                         .anyRequest().authenticated()
                 )
-                .formLogin(Customizer.withDefaults());
+                .addFilterBefore(
+                        jwtFilter,
+                        org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter.class
+                );
 
         return http.build();
     }
 
+    /**
+     * 🔥 THIS BEAN WAS MISSING
+     * Required for AuthController
+     */
     @Bean
-    public InMemoryUserDetailsManager userDetailsService() {
-        // User 1: John Doe
-        UserDetails john = User.builder()
-                .username("john")
-                .password("{noop}user")
-                .roles("USER")
-                .build();
-
-        // User 2: Jane Smith (Admin)
-        UserDetails jane = User.builder()
-                .username("jane")
-                .password("{noop}user")
-                .roles("ADMIN", "USER")
-                .build();
-
-        // User 3: Bob Johnson
-        UserDetails bob = User.builder()
-                .username("bob")
-                .password("{noop}user")
-                .roles("USER")
-                .build();
-
-        // FIX 2: Use InMemoryUserDetailsManager instead of MapReactiveUserDetailsService
-        return new InMemoryUserDetailsManager(john, jane, bob);
+    public AuthenticationManager authenticationManager(
+            AuthenticationConfiguration authenticationConfiguration
+    ) throws Exception {
+        return authenticationConfiguration.getAuthenticationManager();
     }
 }
